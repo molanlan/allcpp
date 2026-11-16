@@ -25,7 +25,7 @@ jobs:
           ALLCPP_COOKIE: ${{ secrets.ALLCPP_COOKIE }}
           WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
           SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
-        run: python3 check_status.py
+        run: python3 .github/check_status.py
 
       - name: 保存状态快照
         run: |
