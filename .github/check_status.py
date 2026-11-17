@@ -38,7 +38,15 @@ HEADERS = {
 }
 
 STATUS_MAP = {0: "已过审", 1: "审核中", 2: "未过审", 3: "未抽中", 4: "已退摊"}
-QUIET_STATUS = "审核中"   # 只有这个状态不提醒
+QUIET_STATUS = "审核中"   # 这个状态只做定时播报，不算"有结果"
+QUIET_HOUR_END = 8        # 本地 0:00-7:59 不播报（结果提醒不受影响）
+TZ_OFFSET = 8             # 北京时间
+
+
+def local_hour():
+    import datetime
+    return datetime.datetime.now(
+        datetime.timezone(datetime.timedelta(hours=TZ_OFFSET))).hour
 
 
 # ---------- 推送 ----------
@@ -210,26 +218,38 @@ def main():
     for s in summary:
         print("  - " + s)
 
-    if not alerts:
-        if state.get("notified") != notified:
-            state["notified"] = notified
-            save_state(state)
-        print("NO_ALERT 没有需要提醒的变化")
+    hour = local_hour()
+    night = hour < QUIET_HOUR_END      # 本地 0:00-7:59 静默
+
+    # 1) 出结果了：任何时候都立刻提醒（同一条结果只提一次）
+    if alerts:
+        lines = []
+        for key, name, st in alerts:
+            lines.append("%s：**%s**" % (name, st))
+            notified[key] = st
+        rec = notify("allcpp 摊位审核有结果了", "\n\n".join(lines))
+        state["notified"] = notified
+        save_state(state)
+        save_result({"time": now_str(), "mode": "alert",
+                     "notify": rec, "detail": " / ".join(lines)})
+        print("ALERT")
+        for ln in lines:
+            print("  " + ln)
         return
 
-    lines = []
-    for key, name, st in alerts:
-        lines.append("%s：**%s**" % (name, st))
-        notified[key] = st
+    if state.get("notified") != notified:
+        state["notified"] = notified
+        save_state(state)
 
-    rec = notify("allcpp 摊位审核有结果了", "\n\n".join(lines))
-    state["notified"] = notified
-    save_state(state)
-    save_result({"time": now_str(), "mode": "alert",
-                 "notify": rec, "detail": " / ".join(lines)})
-    print("ALERT")
-    for ln in lines:
-        print("  " + ln)
+    # 2) 还在审核中：白天每 10 分钟播报一次，夜间静默
+    if night:
+        print("QUIET_NIGHT 夜间不播报（本地 %d 点）" % hour)
+        return
+
+    rec = notify("allcpp 摊位状态", "\n\n".join(summary))
+    save_result({"time": now_str(), "mode": "heartbeat",
+                 "notify": rec, "detail": " / ".join(summary)})
+    print("HEARTBEAT 已播报")
 
 
 if __name__ == "__main__":
