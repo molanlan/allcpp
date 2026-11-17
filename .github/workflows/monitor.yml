@@ -2,11 +2,8 @@ name: allcpp status monitor
 
 on:
   schedule:
-    # GitHub Actions 的 cron 用 UTC 时间（本地 = UTC+8）
-    # 每 10 分钟检查一次（错开整点），仅状态变化时推送
+    # 每 10 分钟查一次（UTC 时间，错开整点）；只有审核结果出来才推送
     - cron: "5,15,25,35,45,55 * * * *"
-    # 每 2 小时播报一次：本地 8:00、10:00 … 22:00（跳过本地 0:00-7:00）
-    - cron: "0 0,2,4,6,8,10,12,14 * * *"
   workflow_dispatch:
     inputs:
       test_notify:
@@ -33,8 +30,6 @@ jobs:
           ALLCPP_COOKIE: ${{ secrets.ALLCPP_COOKIE }}
           WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
           SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
-          # 每 2 小时的整点播报任务 → 强制播报；其余 → 仅在变化时推送
-          ALLCPP_REPORT: ${{ github.event.schedule == '0 0,2,4,6,8,10,12,14 * * *' && '1' || '0' }}
         run: |
           if [ -f check_status.py ]; then
             echo "使用根目录脚本"; python3 check_status.py
@@ -49,32 +44,37 @@ jobs:
           SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
         run: |
           if [ -n "$WECOM_WEBHOOK" ]; then
-            curl -s -X POST "$WECOM_WEBHOOK" \
+            RESP=$(curl -s -X POST "$WECOM_WEBHOOK" \
               -H "Content-Type: application/json" \
-              -d '{"msgtype":"markdown","markdown":{"content":"**allcpp 监控**\n> 推送通道测试成功，状态有变化会在这里提醒你"}}'
+              -d '{"msgtype":"markdown","markdown":{"content":"**allcpp 监控**\n> 推送通道测试成功，状态有变化会在这里提醒你"}}')
+            echo "企业微信返回: $RESP"
+            case "$RESP" in
+              *'"errcode":0'*) echo "推送成功" ;;
+              *) echo "::error::推送失败，检查 WECOM_WEBHOOK 是否正确"; exit 1 ;;
+            esac
           elif [ -n "$SERVERCHAN_KEY" ]; then
-            curl -s -X POST "https://sctapi.ftqq.com/$SERVERCHAN_KEY.send" \
+            RESP=$(curl -s -X POST "https://sctapi.ftqq.com/$SERVERCHAN_KEY.send" \
               --data-urlencode "title=allcpp 监控推送测试" \
-              --data-urlencode "desp=推送通道正常，状态有变化会在这里提醒你"
+              --data-urlencode "desp=推送通道正常，状态有变化会在这里提醒你")
+            echo "Server酱返回: $RESP"
           else
-            echo "未配置任何推送通道，请检查 Secrets"
+            echo "::error::未配置任何推送通道，请在 Secrets 里添加 WECOM_WEBHOOK 或 SERVERCHAN_KEY"
+            exit 1
           fi
 
       - name: 保存状态快照
         run: |
-          if [ -f state.json ] || [ -f .github/state.json ]; then
-            FILES=""
-            [ -f state.json ] && FILES="$FILES state.json"
-            [ -f .github/state.json ] && FILES="$FILES .github/state.json"
-            if [ -n "$(git status --porcelain $FILES)" ]; then
-              git config user.name "github-actions[bot]"
-              git config user.email "github-actions[bot]@users.noreply.github.com"
-              git add $FILES
-              git commit -m "chore: update state"
-              git push
-            else
-              echo "state 无变化"
-            fi
+          FILES=""
+          for f in state.json .github/state.json last_run.json .github/last_run.json; do
+            [ -f "$f" ] && FILES="$FILES $f"
+          done
+          if [ -z "$FILES" ]; then echo "没有需要保存的文件"; exit 0; fi
+          if [ -n "$(git status --porcelain $FILES)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add $FILES
+            git commit -m "chore: update state"
+            git push
           else
-            echo "没有找到 state 文件"
+            echo "没有变化，不需要提交"
           fi
